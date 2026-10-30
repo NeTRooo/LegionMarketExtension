@@ -12,7 +12,6 @@ collector=collector.replace(/  document\.addEventListener\('submit',[\s\S]*?\n  
 let bridge=await read('src/runtime/content-bridge.js');
 bridge=bridge.replace(/  window\.addEventListener\('message',[\s\S]*?\n  }\);/,`  deliverEvent = event => {
     if (!enabled) return;
-    globalThis.__zmaPriest?.ingest(event);
     void chrome.runtime.sendMessage({type:'network-event',event});
   };`);
 bridge=bridge.replace('window.postMessage({ source: MESSAGE_SOURCE, type: \'collector-state\', enabled }, location.origin);','setCollector(enabled);');
@@ -23,8 +22,8 @@ const hud=(await read('src/runtime/hud-panel.js')).replaceAll('popup расши�
 const header=`// ==UserScript==
 // @name         Zakviel Market Addon
 // @namespace    zakviel-market-addon
-// @version      0.12.0
-// @description  Аукцион, игроки, HUD и помощник жреца поверх Легиона
+// @version      0.13.0
+// @description  Аукцион, игроки и настройки Легиона в сворачиваемом HUD
 // @homepageURL  https://github.com/NeTRooo/LegionMarketExtension
 // @supportURL   https://github.com/NeTRooo/LegionMarketExtension/issues
 // @downloadURL  https://raw.githubusercontent.com/NeTRooo/LegionMarketExtension/main/dist/ZakvielMarket.user.js
@@ -75,7 +74,6 @@ const serverFetch=serverTransport(GM_xmlhttpRequest);
 scripts.set('auction-ui/auction.js',()=>{${ui}\n});
 scripts.set('content-bridge.js',()=>{});scripts.set('collector-main.js',()=>{});scripts.set('auction-panel.js',()=>{});scripts.set('hud-panel.js',()=>{});
 (function(chrome,fetch){${worker}\n})(platform.worker,serverFetch);
-${await read('build/runtime.js')}
 ${bridge}
 ${panel}
 ${hud}

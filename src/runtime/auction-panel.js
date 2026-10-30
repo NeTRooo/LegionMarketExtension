@@ -3,9 +3,9 @@
   globalThis.__zmaAuctionPanel = true;
   const channel = /^\/c\/([^/]+)/.exec(location.pathname)?.[1];
   if (!channel || window.top !== window) return;
-  let host, shadow, launcher, dialog, app, status, refreshButton, title, activeView = 'auction', loading = false, refreshing = false, controller = null;
+  let host, shadow, dialog, app, status, refreshButton, title, activeView = 'auction', loading = false, refreshing = false, controller = null;
   const send = message => chrome.runtime.sendMessage(message);
-  const viewLabel = view => view === 'players' ? 'Игроки' : view === 'priest' ? 'Жрец' : 'Аукцион';
+  const viewLabel = view => view === 'players' ? 'Игроки' : 'Аукцион';
   const button = (label, action) => { const node = document.createElement('button'); node.type = 'button'; node.textContent = label; node.addEventListener('click', action); return node; };
 
   function install() {
@@ -13,8 +13,7 @@
     host = document.createElement('div'); host.id = 'zma-auction-host';
     shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
-    style.textContent = ':host{all:initial;color-scheme:dark;font:14px system-ui,sans-serif}*{box-sizing:border-box}button{font:600 13px system-ui,sans-serif;cursor:pointer;border:1px solid #658b91;border-radius:9px;padding:9px 13px;background:#19313e;color:#dcfff2}button:focus-visible{outline:3px solid #b7f7d9;outline-offset:3px}button:disabled{opacity:.5;cursor:wait}.launcher{position:fixed;bottom:20px;right:20px;z-index:2147483646;box-shadow:0 4px 22px #0008;background:#173b35;border-color:#8be6c0}dialog{position:fixed;inset:0;width:min(1440px,96vw);height:92dvh;max-height:96dvh;max-width:96vw;margin:auto;padding:0;border:1px solid #658b91;border-radius:14px;background:#0d1726;color:#edf6ff;overflow:hidden}dialog::backdrop{background:#020a13bb}dialog[open]{display:flex;flex-direction:column}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 16px;background:#192c3d;border-bottom:1px solid #425b70}.toolbar b{margin-right:auto;font:700 16px system-ui,sans-serif}.status{margin:0;padding:8px 16px;color:#b8ccdf;font:12px/1.5 system-ui,sans-serif}.status:empty{display:none}.app{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain} @media(max-width:600px){.launcher{bottom:12px;right:12px}dialog{width:98vw;max-width:98vw;height:96dvh}.toolbar{padding:10px}.toolbar b{flex-basis:100%}}';
-    launcher = button('✦ Аукцион', () => void open()); launcher.className = 'launcher'; launcher.setAttribute('aria-label', 'Открыть аукцион Zakviel Market');
+    style.textContent = ':host{all:initial;color-scheme:dark;font:14px system-ui,sans-serif}*{box-sizing:border-box}button{font:600 13px system-ui,sans-serif;cursor:pointer;border:1px solid #658b91;border-radius:9px;padding:9px 13px;background:#19313e;color:#dcfff2}button:focus-visible{outline:3px solid #b7f7d9;outline-offset:3px}button:disabled{opacity:.5;cursor:wait}dialog{position:fixed;inset:0;width:min(1440px,96vw);height:92dvh;max-height:96dvh;max-width:96vw;margin:auto;padding:0;border:1px solid #658b91;border-radius:14px;background:#0d1726;color:#edf6ff;overflow:hidden}dialog::backdrop{background:#020a13bb}dialog[open]{display:flex;flex-direction:column}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 16px;background:#192c3d;border-bottom:1px solid #425b70}.toolbar b{margin-right:auto;font:700 16px system-ui,sans-serif}.status{margin:0;padding:8px 16px;color:#b8ccdf;font:12px/1.5 system-ui,sans-serif}.status:empty{display:none}.app{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain} @media(max-width:600px){dialog{width:98vw;max-width:98vw;height:96dvh}.toolbar{padding:10px}.toolbar b{flex-basis:100%}}';
     dialog = document.createElement('dialog'); dialog.setAttribute('aria-label', 'Аукцион Zakviel Market');
     const toolbar = document.createElement('div'); toolbar.className = 'toolbar';
     title = document.createElement('b'); title.textContent = 'Zakviel Market';
@@ -22,13 +21,11 @@
     const playersView = button('Игроки и друзья', () => void open('players'));
     refreshButton = button('Обновить из игры', () => void refresh());
     const close = button('Закрыть · Esc', () => dialog.close());
-    toolbar.append(title, auctionView, playersView, button('Жрец',()=>void open('priest')), refreshButton, close);
+    toolbar.append(title, auctionView, playersView, button('Настройки',()=>globalThis.__zmaSettings?.open()), refreshButton, close);
     status = document.createElement('p'); status.className = 'status'; status.setAttribute('role', 'status');
     app = document.createElement('div'); app.className = 'app';
-    const playersLauncher = button('♟ Игроки', () => void open('players')); playersLauncher.className = 'launcher'; playersLauncher.style.bottom = '66px'; playersLauncher.setAttribute('aria-label','Открыть игроков Zakviel Market');
-    const priestLauncher=button('✚ Жрец',()=>void open('priest'));priestLauncher.className='launcher';priestLauncher.style.bottom='158px';priestLauncher.setAttribute('aria-label','Открыть помощника жреца');
-    dialog.append(toolbar, status, app); shadow.append(style, launcher, playersLauncher, priestLauncher, dialog); document.documentElement.append(host);
-    dialog.addEventListener('close', () => { controller?.abort(); globalThis.__zmaAuctionApp?.unmount(); app.replaceChildren(); launcher.focus(); });
+    dialog.append(toolbar, status, app); shadow.append(style, dialog); document.documentElement.append(host);
+    dialog.addEventListener('close', () => { controller?.abort(); globalThis.__zmaAuctionApp?.unmount(); app.replaceChildren(); globalThis.__zmaHudController?.focus(); });
     // Game keyboard shortcuts must not fire while typing inside the modal.
     dialog.addEventListener('keydown', event => event.stopPropagation());
     dialog.addEventListener('keyup', event => event.stopPropagation());
@@ -62,7 +59,7 @@
   async function open(view = 'auction') {
     install();
     if (loading) return;
-    activeView = ['players','priest'].includes(view) ? view : 'auction';
+    activeView = view === 'players' ? 'players' : 'auction';
     title.textContent = 'Zakviel Market · '+viewLabel(activeView);
     dialog.setAttribute('aria-label', title.textContent);
     refreshButton.hidden = activeView !== 'auction'; status.textContent = '';

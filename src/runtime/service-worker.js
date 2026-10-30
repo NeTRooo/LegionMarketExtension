@@ -1,7 +1,7 @@
 import { auctionRequestPath, publicAuctionPayload } from './auction-api.mjs';
 import { playersRequest } from './players-api.mjs';
-import { hudPreferences, dashboardLink } from './hud-state.mjs';
-import { priestPreferences, briefQuestTelemetry } from './priest-state.mjs';
+import { hudPreferences, hudSummary, dashboardLink } from './hud-state.mjs';
+import { briefQuestTelemetry, scrubJournal } from './quest-telemetry.mjs';
 
 const GAME_PATTERN = /^https:\/\/play\.multidonate\.ru\/c\/[^/]+\/?/;
 const STORE_KEY = 'networkJournal';
@@ -11,7 +11,7 @@ const SENSITIVE_KEY = /(?:^|[_-])(token|access[_-]?token|auth(?:orization)?|cook
 const DASHBOARD_URL = 'http://127.0.0.1:4173';
 const SYNC_MODE_KEY = 'syncMode';
 const JOURNAL_VERSION_KEY = 'journalFormatVersion';
-const JOURNAL_VERSION = 3;
+const JOURNAL_VERSION = 4;
 const SYNC_DELAYS = { immediate: 0, '15s': 15_000, '30s': 30_000, '1m': 60_000, '5m': 300_000 };
 let syncTimer = null;
 let pendingEvents = [];
@@ -39,7 +39,10 @@ function syncJournal() {
 
 async function ensureJournalVersion() {
   const { [JOURNAL_VERSION_KEY]: version } = await chrome.storage.local.get(JOURNAL_VERSION_KEY);
-  if (version !== JOURNAL_VERSION) await chrome.storage.local.set({ [JOURNAL_VERSION_KEY]: JOURNAL_VERSION, [STORE_KEY]: [], journalCount:0 });
+  if(version===3){
+    const saved=await chrome.storage.local.get({[STORE_KEY]:[]}),journal=trimJournal(scrubJournal(saved[STORE_KEY]));
+    await chrome.storage.local.set({[JOURNAL_VERSION_KEY]:JOURNAL_VERSION,[STORE_KEY]:journal,journalCount:journal.length});
+  }else if (version !== JOURNAL_VERSION) await chrome.storage.local.set({ [JOURNAL_VERSION_KEY]: JOURNAL_VERSION, [STORE_KEY]: [], journalCount:0 });
 }
 
 function safeValue(value, depth = 0) {
@@ -158,28 +161,7 @@ async function ensureCollector(tabId, enabled) {
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   const auctionSender = sender.tab && sender.frameId === 0 && GAME_PATTERN.test(sender.url || '');
-  if(['priest-state','priest-preferences','priest-context'].includes(message.type)){
-    (async()=>{
-      if(!auctionSender)throw Error('Помощник доступен на вкладке игры');
-      const channel=/^\/c\/([^/]+)/.exec(new URL(sender.url).pathname)?.[1];
-      if(!channel||!/^[A-Za-z0-9_-]{1,80}$/.test(channel))throw Error('Канал не определён');
-      const {authUser,authToken}=await chrome.storage.local.get(['authUser','authToken']),userId=authToken&&authUser?.id?authUser.id:'guest',key=`zma-priest:${userId}:${channel}`;
-      const saved=await chrome.storage.local.get(key);
-      if(message.type==='priest-preferences'){
-        if(message.userId!==userId)throw Error('Аккаунт изменился');
-        const preferences=priestPreferences({...saved[key],...message.preferences});await chrome.storage.local.set({[key]:preferences});hudStateChanged(true);return {ok:true,preferences};
-      }
-      if(message.type==='priest-state'){
-        const state=await chrome.storage.session.get(`enabled:${sender.tab.id}`);
-        return {ok:true,userId,signedIn:!!authToken,collector:!!state[`enabled:${sender.tab.id}`],preferences:priestPreferences(saved[key])};
-      }
-      if(!authToken)throw Error('Войдите через popup расширения');
-      const response=await fetch(`${DASHBOARD_URL}/api/priest/context?${new URLSearchParams({channel})}`,{headers:{authorization:`Bearer ${authToken}`},credentials:'omit',signal:AbortSignal.timeout(15000)});
-      if(!response.ok)throw Error(response.status===401?'Сессия истекла. Войдите через popup':'Не удалось загрузить настройки жреца');
-      return {ok:true,userId,data:await response.json()};
-    })().then(respond).catch(error=>respond({ok:false,error:error instanceof TypeError||error.name==='TimeoutError'?'Локальный сервер недоступен':error.message}));return true;
-  }
-  if (['hud-state','hud-preferences','hud-data','hud-module','hud-link','priest-module'].includes(message.type)) {
+  if (['hud-state','hud-preferences','hud-data','hud-module','hud-link'].includes(message.type)) {
     (async()=>{
       const popup=sender.url===chrome.runtime.getURL('popup.html');
       if(!auctionSender&&!popup)throw Error('Недопустимый контекст HUD');
@@ -211,16 +193,16 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const channel=/^\/c\/([^/]+)/.exec(new URL(sender.url).pathname)?.[1];
       if(!channel||!/^[A-Za-z0-9_-]{1,80}$/.test(channel))throw Error('Канал не определён');
       const headers={'content-type':'application/json',authorization:`Bearer ${authToken}`};
-      if(message.type==='hud-module'||message.type==='priest-module'){
+      if(message.type==='hud-module'){
         const response=await fetch(`${DASHBOARD_URL}/api/settings`,{headers,signal:AbortSignal.timeout(15000)});
         if(!response.ok)throw Error('Не удалось прочитать настройки');
-        const settings=await response.json();settings.modules[message.type==='priest-module'?'priest':'hud']=message.enabled===true;
+        const settings=await response.json();settings.modules.hud=message.enabled===true;
         const updated=await fetch(`${DASHBOARD_URL}/api/settings`,{method:'PUT',headers,body:JSON.stringify(settings),signal:AbortSignal.timeout(15000)});
         if(!updated.ok)throw Error('Не удалось сохранить настройку модуля');hudStateChanged(true);return {ok:true};
       }
       const response=await fetch(`${DASHBOARD_URL}/api/hud?${new URLSearchParams({channel})}`,{headers,credentials:'omit',signal:AbortSignal.timeout(15000)});
       if(!response.ok)throw Error(response.status===401?'Сессия истекла. Войдите через popup':`Ошибка сервера ${response.status}`);
-      return {ok:true,data:await response.json(),userId};
+      return {ok:true,data:hudSummary(await response.json()),userId};
     })().then(respond).catch(error=>respond({ok:false,error:error instanceof TypeError||error.name==='TimeoutError'?'Сервер недоступен':error.message}));
     return true;
   }
@@ -242,7 +224,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const tab = await chrome.tabs.get(message.tabId);
       if (!GAME_PATTERN.test(tab.url || '')) throw Error('Откройте вкладку игры');
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['auction-panel.js'] });
-      await chrome.tabs.sendMessage(tab.id, { type: 'show-auction', view: ['players','priest'].includes(message.view) ? message.view : 'auction' });
+      await chrome.tabs.sendMessage(tab.id, { type: 'show-auction', view: message.view === 'players' ? 'players' : 'auction' });
       return { ok: true };
     })().then(respond).catch(error => respond({ ok: false, error: error.message }));
     return true;

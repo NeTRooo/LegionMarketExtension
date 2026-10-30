@@ -48,7 +48,7 @@
     const candidate = typeof input === 'string' || input instanceof URL ? input : input.url;
     const url = new URL(candidate, location.href);
     if (url.origin !== location.origin) throw new Error('outside game origin');
-    if (/\/api\/(?:city\/(?:say|chat)|mine\/chat|dm(?:\/|$)|friends(?:\/|$))/.test(url.pathname)) throw new Error('private communication stays local');
+    if (/\/api\/(?:chat(?:\/|$)|city\/(?:say|chat)|mine\/chat|dm(?:\/|$)|friends(?:\/|$))/.test(url.pathname)) throw new Error('private communication stays local');
     return { path: url.pathname, query: Object.fromEntries([...url.searchParams].filter(([key]) => !sensitive.test(key))) };
   };
   const stamp = () => new Date().toISOString();

@@ -2,12 +2,10 @@ import { useEffect, useState } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import Auction, { AuctionRequest, AuctionStorage } from './Auction';
 import Players, { PlayersRequest } from './Players';
-import Priest from './Priest';
 import { FoundationProvider } from './foundation';
 import auctionCss from './auction.css?inline';
 import baseCss from './extension-auction.css?inline';
 import playersCss from './players.css?inline';
-import priestCss from './priest.css?inline';
 
 type ExtensionRuntime = {
   runtime: {sendMessage(message:unknown):Promise<{ok?:boolean;error?:string;data?:unknown;signedIn?:boolean;user?:{id:string;login:string}}>};
@@ -30,7 +28,7 @@ const privateRequest:PlayersRequest=async <T,>(path:string,init:RequestInit={}):
   return result.data as T;
 };
 
-function ExtensionAuction({channel,refreshVersion,view,target}:{channel:string;refreshVersion:number;view:'auction'|'players'|'priest';target:{channel:string;seller:string}|null}){
+function ExtensionAuction({channel,refreshVersion,view,target}:{channel:string;refreshVersion:number;view:'auction'|'players';target:{channel:string;seller:string}|null}){
   const [context,setContext]=useState<{user:{id:string;login:string}|null;storage:AuctionStorage}|null>(null),[storageError,setStorageError]=useState('');
   useEffect(()=>{
     let active=true,sequence=0;
@@ -51,18 +49,18 @@ function ExtensionAuction({channel,refreshVersion,view,target}:{channel:string;r
   },[]);
   if(!context)return <p role="status">{storageError||'Подключаем аукцион…'}</p>;
   const {user,storage}=context;
-  return <FoundationProvider token="" onNotify={(text,error)=>(globalThis as unknown as {__zmaHudController?:{notify:(text:string,error:boolean,module:string)=>void}}).__zmaHudController?.notify(text,error,view)}>{storageError&&<p role="alert">{storageError}</p>}<p className="extension-context">{user?`Аккаунт расширения: ${user.login}`:"Для личного списка игроков и свежих снимков войдите через popup расширения."}</p>{view==='priest'?<Priest/>:view==='players'?(user?<Players key={user.id} request={privateRequest} onSeller={(channel,seller)=>scope.__zmaAuctionApp?.showSeller(channel,seller)}/>:<p>Список друзей и наблюдений приватен. Войдите в popup расширения.</p>):<Auction key={`${user?.id||'guest'}:${target?.channel||''}:${target?.seller||''}`} userId={user?.id||'guest'} money={money} request={request} storage={storage} initialChannel={target?.channel||channel} initialSeller={target?.seller} refreshVersion={refreshVersion}/>}</FoundationProvider>;
+  return <FoundationProvider token="" onNotify={(text,error)=>(globalThis as unknown as {__zmaHudController?:{notify:(text:string,error:boolean,module:string)=>void}}).__zmaHudController?.notify(text,error,view)}>{storageError&&<p role="alert">{storageError}</p>}<p className="extension-context">{user?`Аккаунт расширения: ${user.login}`:"Для личного списка игроков и свежих снимков войдите через popup расширения."}</p>{view==='players'?(user?<Players key={user.id} request={privateRequest} onSeller={(channel,seller)=>scope.__zmaAuctionApp?.showSeller(channel,seller)}/>:<p>Список друзей и наблюдений приватен. Войдите в popup расширения.</p>):<Auction key={`${user?.id||'guest'}:${target?.channel||''}:${target?.seller||''}`} userId={user?.id||'guest'} money={money} request={request} storage={storage} initialChannel={target?.channel||channel} initialSeller={target?.seller} refreshVersion={refreshVersion}/>}</FoundationProvider>;
 }
 
-type AuctionApp={mount:(container:HTMLElement,channel:string,view?:'auction'|'players'|'priest')=>void;refresh:()=>void;unmount:()=>void;setView:(view:'auction'|'players'|'priest')=>void;showSeller:(channel:string,seller:string)=>void;onViewChange?:(view:'auction'|'players'|'priest')=>void};
+type AuctionApp={mount:(container:HTMLElement,channel:string,view?:'auction'|'players')=>void;refresh:()=>void;unmount:()=>void;setView:(view:'auction'|'players')=>void;showSeller:(channel:string,seller:string)=>void;onViewChange?:(view:'auction'|'players')=>void};
 const scope=globalThis as unknown as {__zmaAuctionApp?:AuctionApp};
 if(!scope.__zmaAuctionApp){
-  let root:Root|null=null,channel='',refreshVersion=0,view:'auction'|'players'|'priest'='auction',target:{channel:string;seller:string}|null=null;
+  let root:Root|null=null,channel='',refreshVersion=0,view:'auction'|'players'='auction',target:{channel:string;seller:string}|null=null;
   const render=()=>root?.render(<ExtensionAuction channel={channel} refreshVersion={refreshVersion} view={view} target={target}/>);
   scope.__zmaAuctionApp={
     mount(container,nextChannel,nextView='auction'){
       root?.unmount();container.replaceChildren();
-      const style=document.createElement('style');style.textContent=baseCss+'\n'+auctionCss+'\n'+playersCss+'\n'+priestCss;
+      const style=document.createElement('style');style.textContent=baseCss+'\n'+auctionCss+'\n'+playersCss;
       const app=document.createElement('div');app.className='zma-auction-root';container.append(style,app);
       channel=nextChannel;view=nextView;target=null;refreshVersion=0;root=createRoot(app);render();
     },

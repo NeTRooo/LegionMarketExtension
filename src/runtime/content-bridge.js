@@ -6,7 +6,6 @@
   window.addEventListener('message', (event) => {
     if (!enabled || event.source !== window || !event.data || event.data.source !== MESSAGE_SOURCE) return;
     if (event.data.type === 'network-event') {
-      globalThis.__zmaPriest?.ingest(event.data.event);
       chrome.runtime.sendMessage({ type: 'network-event', event: event.data.event });
     }
   });
@@ -68,7 +67,6 @@
   }
   function setEnabled(value) {
     enabled = value;
-    globalThis.__zmaPriest?.setCollector(enabled);
     window.postMessage({ source: MESSAGE_SOURCE, type: 'collector-state', enabled }, location.origin);
     observer?.disconnect();
     if (cityTimer) clearInterval(cityTimer);

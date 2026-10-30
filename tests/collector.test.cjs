@@ -33,6 +33,9 @@ test('disabled collector does not clone bodies; enabled collector strips chat an
   assert.equal(clones, 1);
   await sandbox.window.fetch('/api/dm/send', {method:'POST',body:'{"text":"private"}'});
   await sandbox.window.fetch('/api/friends/list');
+  await sandbox.window.fetch('/api/chat/say',{method:'POST',body:'{"line":"private"}'});
+  await sandbox.window.fetch('/c/test/api/chat/feed?room=mine');
+  await sandbox.window.fetch('/api/chat/watch',{method:'POST',body:'{"rooms":["city"]}'});
   assert.equal(clones, 1);
 });
 

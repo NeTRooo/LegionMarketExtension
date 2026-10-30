@@ -80,7 +80,7 @@ export function createPlatform(gm, tabId, pageUrl, loadScript) {
     if (watched.has(key)) return; watched.add(key);
     gm.listen(localKey(key), (_key, oldValue, newValue, remote) => {
       if (remote) for (const listener of changes) listener({[key]: {oldValue, newValue}}, 'local');
-      if (remote && /^(authToken|authUser|zma-hud:|zma-priest:)/.test(key)) void notify({type:'hud-state-changed',configuration:true});
+      if (remote && /^(authToken|authUser|zma-hud:)/.test(key)) void notify({type:'hud-state-changed',configuration:true});
     });
   }
   const local = {
