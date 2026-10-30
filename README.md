@@ -1,5 +1,9 @@
 # Legion Market Extension
 
+**0.12.0 — единый userscript для Google Chrome, Яндекс.Браузера и Mozilla Firefox с Tampermonkey.** Скрипт выбирает режим по доступным API, проверяет окружение до установки перехватчиков и использует совместимые вспомогательные функции. Устанавливается один и тот же файл. Инструкция и точные границы проверок: [docs/BROWSER_COMPATIBILITY.md](docs/BROWSER_COMPATIBILITY.md).
+
+Версия **0.11.1** исправляет Firefox `Permission denied to access object` в игровых `verCheck` и новостях. Перехватчики и DOM-обработчики экспортируются через `exportFunction`, Promise/ошибки/маркер состояния создаются в контексте страницы, аргументы нативных функций передаются через `Reflect.apply`. GM-хранилище и токен остаются в песочнице. После установки обновления нужно полностью перезагрузить страницу игры: уже установленные старые перехватчики не исчезают при сохранении userscript.
+
 Tampermonkey userscript для игры «Легион»: аукцион в двух режимах, досье продавца, игроки и друзья, HUD и помощник жреца поверх игры.
 
 **Этот репозиторий содержит только браузерный клиент.** Backend, самостоятельный сайт/dashboard, базы данных, Docker и конфигурация сервера сюда не входят. Клиент использует отдельно запущенный совместимый сервер по адресу `http://127.0.0.1:4173`. Серверные расчёты, контакты и импорт требуют этого API; установка userscript сама по себе сервер не запускает.
@@ -25,7 +29,18 @@ npm run build
 npm run check:distribution
 ```
 
-Результат — `dist/ZakvielMarket.user.js`. Исходники в `src/runtime`, `src/ui` и `src/tampermonkey` принадлежат только клиенту. В `tests` находятся клиентские тесты; браузерный сценарий использует синтетические ответы игры и временную заглушку API, а не сервер приложения. Для браузерного сценария нужны Playwright и распакованный Tampermonkey (`PLAYWRIGHT_MODULE`, `TAMPERMONKEY_EXTENSION`), свободный порт 4173. Проверялся Chromium + Tampermonkey 5.5.1; Firefox не проверялся.
+Результат — `dist/ZakvielMarket.user.js`. Исходники в `src/runtime`, `src/ui` и `src/tampermonkey` принадлежат только клиенту. В `tests` находятся клиентские тесты; браузерный сценарий использует синтетические ответы игры и временную заглушку API, а не сервер приложения. Для браузерного сценария нужны Playwright и распакованный Tampermonkey (`PLAYWRIGHT_MODULE`, `TAMPERMONKEY_EXTENSION`), свободный порт 4173. Полный интерфейс проверялся в Chromium + Tampermonkey 5.5.1.
+
+Регрессия Firefox отдельно проверяет настоящий изолированный WebExtension-контекст: воспроизводит отказ старых обёрток, затем проверяет fetch `.then/.finally`, ошибки сети, XHR и SSE с выключенным/включённым сбором и строгой CSP. Это проверка границы контекстов; полный интерфейс Tampermonkey в Firefox этим сценарием не проверяется. Сначала запустите отдельный geckodriver на `127.0.0.1:18875` с временными профилями, затем во втором терминале выполните `npm run test:firefox` (нужен свободный порт 18876 и Python 3):
+
+```bash
+mkdir -p .data/firefox-compartment/profile
+geckodriver --host 127.0.0.1 --port 18875 --profile-root "$PWD/.data/firefox-compartment/profile"
+# Во втором терминале:
+FIREFOX_PATH=/путь/к/бинарному/firefox npm run test:firefox
+```
+
+Для Firefox Snap путь по умолчанию — `/snap/firefox/current/usr/lib/firefox/firefox`. Протокол экспорта: [Mozilla — обмен объектами со страницей](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Sharing_objects_with_page_scripts), [Tampermonkey — sandbox](https://www.tampermonkey.net/documentation.php?q=sandbox).
 
 ## Благодарности
 

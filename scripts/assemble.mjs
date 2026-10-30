@@ -3,6 +3,7 @@ import {fileURLToPath} from 'node:url';
 const root=new URL('../',import.meta.url);
 const read=path=>readFile(new URL(path,root),'utf8');
 const platform=(await read('src/tampermonkey/platform.mjs')).replace(/^export /gm,'');
+const compatibility=(await read('src/tampermonkey/compatibility.mjs')).replace(/^export /gm,'');
 let collector=await read('src/runtime/collector-main.js');
 collector=collector.replace("window.postMessage({ source, type: 'network-event', event }, location.origin)",'deliverEvent(event)');
 collector=collector.replace(/  window\.addEventListener\('message', .*\n/, '  setCollector = value => { state.enabled = !!value; };\n');
@@ -22,7 +23,7 @@ const hud=(await read('src/runtime/hud-panel.js')).replaceAll('popup расши�
 const header=`// ==UserScript==
 // @name         Zakviel Market Addon
 // @namespace    zakviel-market-addon
-// @version      0.11.0
+// @version      0.12.0
 // @description  Аукцион, игроки, HUD и помощник жреца поверх Легиона
 // @homepageURL  https://github.com/NeTRooo/LegionMarketExtension
 // @supportURL   https://github.com/NeTRooo/LegionMarketExtension/issues
@@ -50,14 +51,20 @@ const header=`// ==UserScript==
 const output=header+`\n(async function(){
 'use strict';
 if(window.top!==window)return;
+${compatibility}
+const compatibility=createBrowserRuntime(window,{${['GM_getValue','GM_setValue','GM_deleteValue','GM_listValues','GM_addValueChangeListener','GM_getTab','GM_saveTab','GM_getTabs','GM_xmlhttpRequest','GM_openInTab','GM_registerMenuCommand'].map(name=>`${name}:typeof ${name}==='function'?${name}:null`).join(',')}});
+if(typeof unsafeWindow==='undefined')compatibility.missing.push('unsafeWindow');
+if(!compatibility.supported||compatibility.missing.length){showCompatibilityFailure(document,compatibility.missing);return;}
+const AbortController=compatibility.AbortController,AbortSignal=compatibility.AbortSignal;
 if(unsafeWindow.__zakvielMarketAddon){console.warn('Zakviel Market: отключите старое расширение или второй экземпляр userscript и перезагрузите игру.');return;}
 // Local shared module registry; never assigned to the game window.
 const globalThis=Object.create(null);
 let deliverEvent=()=>{},setCollector=()=>{};
+const pageBindings=createPageBindings(unsafeWindow,typeof exportFunction==='function'?exportFunction:null);
 (function(window,XMLHttpRequest,URL,URLSearchParams,HTMLFormElement){${collector}\n})(unsafeWindow,unsafeWindow.XMLHttpRequest,unsafeWindow.URL,unsafeWindow.URLSearchParams,unsafeWindow.HTMLFormElement);
 ${platform}
 const tabState=await new Promise(resolve=>GM_getTab(resolve));
-if(!tabState.zmaId){tabState.zmaId=crypto.randomUUID();GM_saveTab(tabState);}
+if(!tabState.zmaId){tabState.zmaId=compatibility.tabId();GM_saveTab(tabState);}
 const gmStore={get:GM_getValue,set:GM_setValue,delete:GM_deleteValue,list:GM_listValues};
 const otherTabs=await new Promise(resolve=>GM_getTabs(resolve));
 recoverQueues(gmStore,tabState.zmaId,Object.values(otherTabs).map(tab=>tab.zmaId).filter(Boolean));
@@ -73,7 +80,7 @@ ${bridge}
 ${panel}
 ${hud}
 ${await read('src/tampermonkey/settings.js')}
-const ready=()=>{installSettings(platform);void platform.settings({type:'set-sync-mode',mode:GM_getValue('zma:syncMode','15s')});};
+const ready=()=>{installSettings(platform,compatibility);void platform.settings({type:'set-sync-mode',mode:GM_getValue('zma:syncMode','15s')});};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready,{once:true});else ready();
 })().catch(error=>console.error('Zakviel Market:',error));\n`;
 await mkdir(new URL('dist/',root),{recursive:true});

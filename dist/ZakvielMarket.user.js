@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zakviel Market Addon
 // @namespace    zakviel-market-addon
-// @version      0.11.0
+// @version      0.12.0
 // @description  Аукцион, игроки, HUD и помощник жреца поверх Легиона
 // @homepageURL  https://github.com/NeTRooo/LegionMarketExtension
 // @supportURL   https://github.com/NeTRooo/LegionMarketExtension/issues
@@ -29,14 +29,61 @@
 (async function(){
 'use strict';
 if(window.top!==window)return;
+// Browser selection is based on available APIs, never on user-agent strings.
+function createBrowserRuntime(scope, manager) {
+  const missing=Object.entries(manager).filter(([,value])=>typeof value!=='function').map(([name])=>name);
+  for(const name of ['fetch','XMLHttpRequest','AbortController','AbortSignal','DOMException','MutationObserver','TextEncoder'])if(typeof scope[name]!=='function')missing.push(name);
+  if(typeof scope.Element?.prototype?.attachShadow!=='function')missing.push('Shadow DOM');
+  if(typeof scope.HTMLDialogElement?.prototype?.showModal!=='function')missing.push('dialog.showModal');
+  if(typeof scope.crypto?.getRandomValues!=='function')missing.push('crypto.getRandomValues');
+  if(missing.length)return {supported:false,missing};
+  const NativeController=scope.AbortController,NativeSignal=scope.AbortSignal;
+  const Controller=typeof NativeSignal.prototype.throwIfAborted==='function'?NativeController:class extends NativeController {
+    constructor(){super();Object.defineProperty(this.signal,'throwIfAborted',{value(){if(this.aborted)throw this.reason||new scope.DOMException('Aborted','AbortError');}});}
+  };
+  const Signal=typeof NativeSignal.timeout==='function'&&typeof NativeSignal.prototype.throwIfAborted==='function'?NativeSignal:{timeout(ms){
+    if(!Number.isInteger(ms)||ms<0||ms>2147483647)throw new RangeError('Invalid timeout');
+    const controller=new Controller();
+    const timer=scope.setTimeout(()=>controller.abort(new scope.DOMException('Сервер не ответил','TimeoutError')),ms);
+    controller.signal.addEventListener('abort',()=>scope.clearTimeout(timer),{once:true});
+    return controller.signal;
+  }};
+  return {supported:true,missing:[],AbortController:Controller,AbortSignal:Signal,
+    tabId(){
+      if(typeof scope.crypto.randomUUID==='function')return scope.crypto.randomUUID();
+      const bytes=new Uint8Array(16);scope.crypto.getRandomValues(bytes);bytes[6]=bytes[6]&15|64;bytes[8]=bytes[8]&63|128;
+      const hex=Array.from(bytes,value=>value.toString(16).padStart(2,'0')).join('');
+      return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+    },
+  };
+}
+
+function showCompatibilityFailure(document,missing) {
+  const show=()=>{
+    if(document.getElementById('zma-compatibility-error'))return;
+    const message=document.createElement('aside');message.id='zma-compatibility-error';message.setAttribute('role','alert');
+    message.style.cssText='position:fixed;top:12px;right:12px;max-width:420px;padding:16px;background:#302032;color:#fff;border:1px solid #f99;border-radius:10px;z-index:2147483647;font:14px/1.5 system-ui';
+    message.textContent='Zakviel Market: обновите браузер и Tampermonkey, разрешите выполнение userscript. Недоступны: '+missing.join(', ')+'.';
+    document.documentElement.append(message);
+  };
+  if(document.documentElement)show();else document.addEventListener('DOMContentLoaded',show,{once:true});
+}
+
+const compatibility=createBrowserRuntime(window,{GM_getValue:typeof GM_getValue==='function'?GM_getValue:null,GM_setValue:typeof GM_setValue==='function'?GM_setValue:null,GM_deleteValue:typeof GM_deleteValue==='function'?GM_deleteValue:null,GM_listValues:typeof GM_listValues==='function'?GM_listValues:null,GM_addValueChangeListener:typeof GM_addValueChangeListener==='function'?GM_addValueChangeListener:null,GM_getTab:typeof GM_getTab==='function'?GM_getTab:null,GM_saveTab:typeof GM_saveTab==='function'?GM_saveTab:null,GM_getTabs:typeof GM_getTabs==='function'?GM_getTabs:null,GM_xmlhttpRequest:typeof GM_xmlhttpRequest==='function'?GM_xmlhttpRequest:null,GM_openInTab:typeof GM_openInTab==='function'?GM_openInTab:null,GM_registerMenuCommand:typeof GM_registerMenuCommand==='function'?GM_registerMenuCommand:null});
+if(typeof unsafeWindow==='undefined')compatibility.missing.push('unsafeWindow');
+if(!compatibility.supported||compatibility.missing.length){showCompatibilityFailure(document,compatibility.missing);return;}
+const AbortController=compatibility.AbortController,AbortSignal=compatibility.AbortSignal;
 if(unsafeWindow.__zakvielMarketAddon){console.warn('Zakviel Market: отключите старое расширение или второй экземпляр userscript и перезагрузите игру.');return;}
 // Local shared module registry; never assigned to the game window.
 const globalThis=Object.create(null);
 let deliverEvent=()=>{},setCollector=()=>{};
+const pageBindings=createPageBindings(unsafeWindow,typeof exportFunction==='function'?exportFunction:null);
 (function(window,XMLHttpRequest,URL,URLSearchParams,HTMLFormElement){(() => {
   if (window.__zakvielMarketAddon) return;
   const source = 'zakviel-market-addon';
-  const state = (window.__zakvielMarketAddon = { enabled: false });
+  const bindings = typeof pageBindings === 'undefined' ? {expose:fn=>fn,object:()=>({})} : pageBindings;
+  const expose = bindings.expose;
+  const state = bindings.object();state.enabled = false;window.__zakvielMarketAddon = state;
   const sensitive = /(?:^|[_-])(token|access[_-]?token|auth(?:orization)?|cookie|password|passwd|secret|api[_-]?key|session|sid|lk)(?:$|[_-])/i;
   const clean = (value, depth = 0) => {
     if (depth > 12) return '[глубина ограничена]';
@@ -88,44 +135,45 @@ let deliverEvent=()=>{},setCollector=()=>{};
 
 
   const originalFetch = window.fetch;
-  window.fetch = async function (input, init = {}) {
+  window.fetch = expose(async function (input, init = {}) {
     const at = performance.now(), method = (init.method || (typeof input === 'object' && input.method) || 'GET').toUpperCase();
-    let endpoint; try { endpoint = details(input); } catch { return originalFetch.apply(this, arguments); }
-    if (!state.enabled || !shouldCapture(endpoint)) return originalFetch.apply(this, arguments);
+    let endpoint; try { endpoint = details(input); } catch { return Reflect.apply(originalFetch, this, arguments); }
+    if (!state.enabled || !shouldCapture(endpoint)) return Reflect.apply(originalFetch, this, arguments);
     const request = requestPayload(init.body);
     try {
-      const response = await originalFetch.apply(this, arguments);
+      const response = await Reflect.apply(originalFetch, this, arguments);
       void payload(response).then((body) => publish({ kind: 'fetch', at: stamp(), method, ...endpoint, status: response.status, contentType: response.headers.get('content-type') || null, contentLength: response.headers.get('content-length') || null, durationMs: Math.round(performance.now() - at), ...(request !== undefined ? { request } : {}), response: body }));
       return response;
     } catch (error) {
       publish({ kind: 'fetch', at: stamp(), method, ...endpoint, error: error && error.name || 'NetworkError', durationMs: Math.round(performance.now() - at), ...(request !== undefined ? { request } : {}) });
       throw error;
     }
-  };
+  }, true);
 
   const open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url) { this.__zma = { method: String(method || 'GET').toUpperCase(), url }; return open.apply(this, arguments); };
-  XMLHttpRequest.prototype.send = function (body) {
-    if (!state.enabled) return send.apply(this, arguments);
-    const meta = this.__zma, at = performance.now(), request = requestPayload(body);
-    if (meta) this.addEventListener('loadend', () => { try { const endpoint = details(meta.url); if (!shouldCapture(endpoint)) return; publish({ kind: 'xhr', at: stamp(), method: meta.method, ...endpoint, status: this.status, contentType: this.getResponseHeader('content-type'), contentLength: this.getResponseHeader('content-length'), durationMs: Math.round(performance.now() - at), ...(request !== undefined ? { request } : {}), response: decode(this.responseText || '') }); } catch { /* Ignore cross-origin XHR. */ } }, { once: true });
-    return send.apply(this, arguments);
-  };
+  const requests = new WeakMap();
+  XMLHttpRequest.prototype.open = expose(function (method, url) { requests.set(this,{ method: String(method || 'GET').toUpperCase(), url }); return Reflect.apply(open, this, arguments); });
+  XMLHttpRequest.prototype.send = expose(function (body) {
+    if (!state.enabled) return Reflect.apply(send, this, arguments);
+    const meta = requests.get(this), at = performance.now(), request = requestPayload(body);
+    if (meta) this.addEventListener('loadend', expose(() => { try { const endpoint = details(meta.url); if (!shouldCapture(endpoint)) return; publish({ kind: 'xhr', at: stamp(), method: meta.method, ...endpoint, status: this.status, contentType: this.getResponseHeader('content-type'), contentLength: this.getResponseHeader('content-length'), durationMs: Math.round(performance.now() - at), ...(request !== undefined ? { request } : {}), response: decode(this.responseText || '') }); } catch { /* Ignore cross-origin XHR. */ } }), { once: true });
+    return Reflect.apply(send, this, arguments);
+  });
 
   const NativeEventSource = window.EventSource;
-  if (NativeEventSource) window.EventSource = function (url, config) {
+  if (NativeEventSource) window.EventSource = expose(function (url, config) {
     let endpoint; try { endpoint = details(url); } catch { return new NativeEventSource(url, config); }
     const stream = new NativeEventSource(url, config);
     publish({ kind: 'sse-open', at: stamp(), method: 'GET', ...endpoint });
     const add = stream.addEventListener.bind(stream);
-    stream.addEventListener = (type, listener, options) => add(type, function (event) {
+    stream.addEventListener = expose((type, listener, options) => add(type, expose(function (event) {
       const interval = type === 'city' || type === 'mine' ? 5000 : type === 'me' ? 2000 : 1000;
       if (state.enabled && !['dm','fr','friends'].includes(String(type)) && event && typeof event.data === 'string' && shouldCapture(endpoint, String(type), interval)) publish({ kind: 'sse-message', at: stamp(), method: 'GET', ...endpoint, eventType: type, response: decode(event.data) });
-      return typeof listener === 'function' ? listener.call(this, event) : listener.handleEvent.call(listener, event);
-    }, options);
+      return typeof listener === 'function' ? Reflect.apply(listener, this, [event]) : listener ? Reflect.apply(listener.handleEvent, listener, [event]) : undefined;
+    }), options));
     stream.addEventListener('error', () => publish({ kind: 'sse-error', at: stamp(), method: 'GET', ...endpoint }));
     return stream;
-  };
+  });
   if (NativeEventSource) {
     window.EventSource.prototype = NativeEventSource.prototype;
     for (const key of ['CONNECTING', 'OPEN', 'CLOSED']) window.EventSource[key] = NativeEventSource[key];
@@ -135,6 +183,28 @@ let deliverEvent=()=>{},setCollector=()=>{};
 
 })(unsafeWindow,unsafeWindow.XMLHttpRequest,unsafeWindow.URL,unsafeWindow.URLSearchParams,unsafeWindow.HTMLFormElement);
 // Privileged APIs stay inside the Tampermonkey sandbox, never on unsafeWindow.
+function createPageBindings(page, exportFunction) {
+  if(typeof exportFunction!=='function')return {expose:fn=>fn,object:()=>({})};
+  const pageError=error=>{
+    if(error instanceof page.Error||page.DOMException&&error instanceof page.DOMException)return error;
+    const result=new page.Error(String(error?.message||error));result.name=String(error?.name||'Error');return result;
+  };
+  return {
+    object:()=>new page.Object(),
+    expose(fn, asynchronous=false){
+      return exportFunction(function(...args){
+        // Firefox lets the page call exported functions, but not access a
+        // sandbox Promise returned by an async function (even while disabled).
+        if(asynchronous)return new page.Promise(exportFunction(function(resolve,reject){
+          try{Promise.resolve(fn.apply(this,args)).then(resolve,error=>reject(pageError(error)));}
+          catch(error){reject(pageError(error));}
+        }.bind(this),page));
+        try{return fn.apply(this,args);}catch(error){throw pageError(error);}
+      },page);
+    },
+  };
+}
+
 function recoverQueues(gm, tabId, activeIds, now = Date.now()) {
   const prefix=`zma:tab:${tabId}:`, live=new Set([...activeIds,tabId]);
   const candidates=gm.list().filter(key=>/^zma:tab:[^:]+:networkJournal$/.test(key)).map(key=>({key,id:key.split(':')[2],at:gm.get(key.replace(/networkJournal$/,'lastSeen'),0)})).filter(entry=>!live.has(entry.id));
@@ -241,7 +311,7 @@ function createPlatform(gm, tabId, pageUrl, loadScript) {
 }
 
 const tabState=await new Promise(resolve=>GM_getTab(resolve));
-if(!tabState.zmaId){tabState.zmaId=crypto.randomUUID();GM_saveTab(tabState);}
+if(!tabState.zmaId){tabState.zmaId=compatibility.tabId();GM_saveTab(tabState);}
 const gmStore={get:GM_getValue,set:GM_setValue,delete:GM_deleteValue,list:GM_listValues};
 const otherTabs=await new Promise(resolve=>GM_getTabs(resolve));
 recoverQueues(gmStore,tabState.zmaId,Object.values(otherTabs).map(tab=>tab.zmaId).filter(Boolean));
@@ -573,12 +643,13 @@ scripts.set('content-bridge.js',()=>{});scripts.set('collector-main.js',()=>{});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});else install();
 })();
 
-function installSettings(platform) {
+function installSettings(platform,compatibility) {
   const root=globalThis.__zmaMarketShell.getRoot();
   const dialog=document.createElement('dialog');dialog.setAttribute('aria-label','Настройки Zakviel Market');
   dialog.style.cssText='width:min(480px,94vw);height:auto;max-height:92dvh;overflow:auto;padding:20px';
   const form=document.createElement('form');form.method='dialog';
   const title=document.createElement('h2');title.textContent='Zakviel Market · Tampermonkey';
+  const environment=document.createElement('p');environment.textContent=compatibility?.supported?'Браузер: необходимые функции доступны.':'';
   const status=document.createElement('p');status.setAttribute('role','status');
   const account=document.createElement('p');
   const identity=document.createElement('input');identity.autocomplete='username';identity.placeholder='Логин или почта';identity.setAttribute('aria-label','Логин или почта');
@@ -603,7 +674,7 @@ function installSettings(platform) {
     toggle.textContent=enabled?'Выключить сбор':'Включить сбор';sync.value=settings.mode;queue.textContent=`В очереди этой вкладки: ${journal.count}`;
   }
   const hint=document.createElement('p');hint.textContent='Сервер: http://127.0.0.1:4173. Отправка работает, пока открыта страница игры. Сбор выключен при каждой загрузке страницы.';
-  form.append(title,account,identity,password,login,logout,toggle,label,sync,queue,button('Очистить очередь этой вкладки',()=>send({type:'clear-journal'})),hint,status,button('Закрыть',()=>{password.value='';dialog.close();}));
+  form.append(title,environment,account,identity,password,login,logout,toggle,label,sync,queue,button('Очистить очередь этой вкладки',()=>send({type:'clear-journal'})),hint,status,button('Закрыть',()=>{password.value='';dialog.close();}));
   form.addEventListener('submit',event=>{event.preventDefault();if(!login.hidden)login.click();});
   form.addEventListener('keydown',event=>event.stopPropagation());form.addEventListener('keyup',event=>event.stopPropagation());
   dialog.addEventListener('close',()=>{password.value='';});
@@ -613,6 +684,6 @@ function installSettings(platform) {
   GM_registerMenuCommand('Zakviel Market — настройки',open);
 }
 
-const ready=()=>{installSettings(platform);void platform.settings({type:'set-sync-mode',mode:GM_getValue('zma:syncMode','15s')});};
+const ready=()=>{installSettings(platform,compatibility);void platform.settings({type:'set-sync-mode',mode:GM_getValue('zma:syncMode','15s')});};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready,{once:true});else ready();
 })().catch(error=>console.error('Zakviel Market:',error));

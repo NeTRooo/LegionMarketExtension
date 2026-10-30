@@ -1,7 +1,9 @@
 (() => {
   if (window.__zakvielMarketAddon) return;
   const source = 'zakviel-market-addon';
-  const state = (window.__zakvielMarketAddon = { enabled: false });
+  const bindings = typeof pageBindings === 'undefined' ? {expose:fn=>fn,object:()=>({})} : pageBindings;
+  const expose = bindings.expose;
+  const state = bindings.object();state.enabled = false;window.__zakvielMarketAddon = state;
   const sensitive = /(?:^|[_-])(token|access[_-]?token|auth(?:orization)?|cookie|password|passwd|secret|api[_-]?key|session|sid|lk)(?:$|[_-])/i;
   const clean = (value, depth = 0) => {
     if (depth > 12) return '[глубина ограничена]';
@@ -56,44 +58,45 @@
   }, true);
 
   const originalFetch = window.fetch;
-  window.fetch = async function (input, init = {}) {
+  window.fetch = expose(async function (input, init = {}) {
     const at = performance.now(), method = (init.method || (typeof input === 'object' && input.method) || 'GET').toUpperCase();
-    let endpoint; try { endpoint = details(input); } catch { return originalFetch.apply(this, arguments); }
-    if (!state.enabled || !shouldCapture(endpoint)) return originalFetch.apply(this, arguments);
+    let endpoint; try { endpoint = details(input); } catch { return Reflect.apply(originalFetch, this, arguments); }
+    if (!state.enabled || !shouldCapture(endpoint)) return Reflect.apply(originalFetch, this, arguments);
     const request = requestPayload(init.body);
     try {
-      const response = await originalFetch.apply(this, arguments);
+      const response = await Reflect.apply(originalFetch, this, arguments);
       void payload(response).then((body) => publish({ kind: 'fetch', at: stamp(), method, ...endpoint, status: response.status, contentType: response.headers.get('content-type') || null, contentLength: response.headers.get('content-length') || null, durationMs: Math.round(performance.now() - at), ...(request !== undefined ? { request } : {}), response: body }));
       return response;
     } catch (error) {
       publish({ kind: 'fetch', at: stamp(), method, ...endpoint, error: error && error.name || 'NetworkError', durationMs: Math.round(performance.now() - at), ...(request !== undefined ? { request } : {}) });
       throw error;
     }
-  };
+  }, true);
 
   const open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url) { this.__zma = { method: String(method || 'GET').toUpperCase(), url }; return open.apply(this, arguments); };
-  XMLHttpRequest.prototype.send = function (body) {
-    if (!state.enabled) return send.apply(this, arguments);
-    const meta = this.__zma, at = performance.now(), request = requestPayload(body);
-    if (meta) this.addEventListener('loadend', () => { try { const endpoint = details(meta.url); if (!shouldCapture(endpoint)) return; publish({ kind: 'xhr', at: stamp(), method: meta.method, ...endpoint, status: this.status, contentType: this.getResponseHeader('content-type'), contentLength: this.getResponseHeader('content-length'), durationMs: Math.round(performance.now() - at), ...(request !== undefined ? { request } : {}), response: decode(this.responseText || '') }); } catch { /* Ignore cross-origin XHR. */ } }, { once: true });
-    return send.apply(this, arguments);
-  };
+  const requests = new WeakMap();
+  XMLHttpRequest.prototype.open = expose(function (method, url) { requests.set(this,{ method: String(method || 'GET').toUpperCase(), url }); return Reflect.apply(open, this, arguments); });
+  XMLHttpRequest.prototype.send = expose(function (body) {
+    if (!state.enabled) return Reflect.apply(send, this, arguments);
+    const meta = requests.get(this), at = performance.now(), request = requestPayload(body);
+    if (meta) this.addEventListener('loadend', expose(() => { try { const endpoint = details(meta.url); if (!shouldCapture(endpoint)) return; publish({ kind: 'xhr', at: stamp(), method: meta.method, ...endpoint, status: this.status, contentType: this.getResponseHeader('content-type'), contentLength: this.getResponseHeader('content-length'), durationMs: Math.round(performance.now() - at), ...(request !== undefined ? { request } : {}), response: decode(this.responseText || '') }); } catch { /* Ignore cross-origin XHR. */ } }), { once: true });
+    return Reflect.apply(send, this, arguments);
+  });
 
   const NativeEventSource = window.EventSource;
-  if (NativeEventSource) window.EventSource = function (url, config) {
+  if (NativeEventSource) window.EventSource = expose(function (url, config) {
     let endpoint; try { endpoint = details(url); } catch { return new NativeEventSource(url, config); }
     const stream = new NativeEventSource(url, config);
     publish({ kind: 'sse-open', at: stamp(), method: 'GET', ...endpoint });
     const add = stream.addEventListener.bind(stream);
-    stream.addEventListener = (type, listener, options) => add(type, function (event) {
+    stream.addEventListener = expose((type, listener, options) => add(type, expose(function (event) {
       const interval = type === 'city' || type === 'mine' ? 5000 : type === 'me' ? 2000 : 1000;
       if (state.enabled && !['dm','fr','friends'].includes(String(type)) && event && typeof event.data === 'string' && shouldCapture(endpoint, String(type), interval)) publish({ kind: 'sse-message', at: stamp(), method: 'GET', ...endpoint, eventType: type, response: decode(event.data) });
-      return typeof listener === 'function' ? listener.call(this, event) : listener.handleEvent.call(listener, event);
-    }, options);
+      return typeof listener === 'function' ? Reflect.apply(listener, this, [event]) : listener ? Reflect.apply(listener.handleEvent, listener, [event]) : undefined;
+    }), options));
     stream.addEventListener('error', () => publish({ kind: 'sse-error', at: stamp(), method: 'GET', ...endpoint }));
     return stream;
-  };
+  });
   if (NativeEventSource) {
     window.EventSource.prototype = NativeEventSource.prototype;
     for (const key of ['CONNECTING', 'OPEN', 'CLOSED']) window.EventSource[key] = NativeEventSource[key];

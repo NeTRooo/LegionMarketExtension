@@ -1,6 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createPlatform,serverTransport,recoverQueues} from '../src/tampermonkey/platform.mjs';
+import vm from 'node:vm';
+import {createPlatform,serverTransport,recoverQueues,createPageBindings} from '../src/tampermonkey/platform.mjs';
+
+test('Firefox hooks export functions and return promises, state and errors owned by the page',async()=>{
+  const page=vm.runInNewContext('({Promise,Error,Object})'),exported=[];
+  const bindings=createPageBindings(page,(fn,target)=>{assert.equal(target,page);exported.push(fn);return fn;});
+  assert(bindings.object() instanceof page.Object);
+  const response=new page.Object();response.ok=true;
+  const context={request:true};
+  const fetch=bindings.expose(async function(input){assert.equal(this,context);assert.equal(input,'/site/ver');return response;},true);
+  const promise=fetch.call(context,'/site/ver');
+  assert(promise instanceof page.Promise);assert(!(promise instanceof Promise));
+  assert.equal(await promise.then(value=>value).finally(()=>{}),response);
+  assert(exported.includes(fetch));assert.equal(exported.length,2);
+  const failed=bindings.expose(async()=>{throw new TypeError('fixture failure');},true);
+  await assert.rejects(failed(),error=>error instanceof page.Error&&error.name==='TypeError'&&error.message==='fixture failure');
+  const native=new page.Error('native');
+  await assert.rejects(bindings.expose(()=>Promise.reject(native),true)(),error=>error===native);
+  const open=bindings.expose(function(method,url){assert.equal(this,context);return method+url;});
+  assert.equal(open.call(context,'GET','/news'),'GET/news');
+  assert.throws(bindings.expose(()=>{throw new Error('sync');}),error=>error instanceof page.Error&&error.message==='sync');
+});
+test('same-context browsers retain original callable identity without Firefox export APIs',()=>{
+  const fn=()=>42,bindings=createPageBindings({},null);
+  assert.equal(bindings.expose(fn),fn);assert.equal(bindings.expose(fn,true),fn);
+  assert.deepEqual(bindings.object(),{});
+});
 
 function storage(){const data=new Map(),listeners=new Map();return {data,get:(key,fallback)=>data.has(key)?data.get(key):fallback,set:(key,value)=>data.set(key,value),delete:key=>data.delete(key),listen:(key,fn)=>listeners.set(key,fn),open(){},listeners};}
 test('recover closed tabs without touching active queues; expire seven-day data and bound merged journal',()=>{

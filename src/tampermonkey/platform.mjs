@@ -1,4 +1,26 @@
 // Privileged APIs stay inside the Tampermonkey sandbox, never on unsafeWindow.
+export function createPageBindings(page, exportFunction) {
+  if(typeof exportFunction!=='function')return {expose:fn=>fn,object:()=>({})};
+  const pageError=error=>{
+    if(error instanceof page.Error||page.DOMException&&error instanceof page.DOMException)return error;
+    const result=new page.Error(String(error?.message||error));result.name=String(error?.name||'Error');return result;
+  };
+  return {
+    object:()=>new page.Object(),
+    expose(fn, asynchronous=false){
+      return exportFunction(function(...args){
+        // Firefox lets the page call exported functions, but not access a
+        // sandbox Promise returned by an async function (even while disabled).
+        if(asynchronous)return new page.Promise(exportFunction(function(resolve,reject){
+          try{Promise.resolve(fn.apply(this,args)).then(resolve,error=>reject(pageError(error)));}
+          catch(error){reject(pageError(error));}
+        }.bind(this),page));
+        try{return fn.apply(this,args);}catch(error){throw pageError(error);}
+      },page);
+    },
+  };
+}
+
 export function recoverQueues(gm, tabId, activeIds, now = Date.now()) {
   const prefix=`zma:tab:${tabId}:`, live=new Set([...activeIds,tabId]);
   const candidates=gm.list().filter(key=>/^zma:tab:[^:]+:networkJournal$/.test(key)).map(key=>({key,id:key.split(':')[2],at:gm.get(key.replace(/networkJournal$/,'lastSeen'),0)})).filter(entry=>!live.has(entry.id));

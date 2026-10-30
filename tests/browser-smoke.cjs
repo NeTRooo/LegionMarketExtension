@@ -29,13 +29,52 @@ const analysis=()=>({channel:'test',updatedAt:now(),computedAt:now(),stale:false
     res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(data));
   });
   await new Promise((resolve,reject)=>server.listen(4173,'127.0.0.1',resolve).once('error',reject));
-  const extension=process.env.TAMPERMONKEY_EXTENSION;if(!extension)throw Error('Set TAMPERMONKEY_EXTENSION');
+  const managerFixture=process.env.GM_FIXTURE==='1';
+  const extension=process.env.TAMPERMONKEY_EXTENSION;if(!extension&&!managerFixture)throw Error('Set TAMPERMONKEY_EXTENSION');
   context=await chromium.launchPersistentContext(process.env.TAMPERMONKEY_PROFILE||path.join(root,'.data/tampermonkey-smoke'),{
-    executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:true,ignoreDefaultArgs:['--disable-extensions'],
-    args:['--no-sandbox',`--disable-extensions-except=${extension}`,`--load-extension=${extension}`],
+    executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:process.env.BROWSER_HEADLESS!=='0',ignoreDefaultArgs:['--disable-extensions'],
+    args:['--no-sandbox',...(managerFixture?[]:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`])],
   });
   context.on('page',page=>page.on('dialog',dialog=>void dialog.accept()));
-  const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');
+  if(managerFixture){
+    // Explicit test double for browsers whose automation mode refuses loading
+    // extensions. This validates browser functionality, not manager isolation.
+    await context.exposeBinding('__fixtureGMRequest',async(_source,request)=>{
+      const url=new URL(request.url);
+      if(url.origin!=='http://127.0.0.1:4173'||!url.pathname.startsWith('/api/'))throw Error('Fixture URL rejected');
+      const response=await fetch(url,{method:request.method,headers:request.headers,body:request.data,redirect:'error'});
+      return {status:response.status,responseText:await response.text(),finalUrl:url.href};
+    });
+    const fixture=`(()=>{
+      const key='test-only-gm-storage',tabKey='test-only-gm-tab';
+      const get=()=>JSON.parse(localStorage.getItem(key)||'{}');
+      Object.assign(window,{
+        unsafeWindow:window,
+        GM_getValue:(name,fallback)=>{const values=get();return name in values?values[name]:fallback;},
+        GM_setValue:(name,value)=>{const values=get();values[name]=value;localStorage.setItem(key,JSON.stringify(values));},
+        GM_deleteValue:name=>{const values=get();delete values[name];localStorage.setItem(key,JSON.stringify(values));},
+        GM_listValues:()=>Object.keys(get()),GM_addValueChangeListener:()=>1,
+        GM_getTab:callback=>callback(JSON.parse(sessionStorage.getItem(tabKey)||'{}')),
+        GM_saveTab:value=>sessionStorage.setItem(tabKey,JSON.stringify(value)),
+        GM_getTabs:callback=>callback({current:JSON.parse(sessionStorage.getItem(tabKey)||'{}')}),
+        GM_openInTab:()=>{},GM_registerMenuCommand:()=>{},
+        GM_xmlhttpRequest:options=>{let aborted=false;window.__fixtureGMRequest({url:options.url,method:options.method,headers:options.headers,data:options.data}).then(response=>{if(!aborted)options.onload(response);},()=>{if(!aborted)options.onerror();});return {abort(){aborted=true;options.onabort?.();}};}
+      });
+    })();`;
+    await context.addInitScript({content:fixture+'\n'+fs.readFileSync(userScript,'utf8')});
+  }else{
+  // Yandex has built-in service workers. Select the loaded manager by its
+  // manifest, never whichever background worker happened to start first.
+  const expected=JSON.parse(fs.readFileSync(path.join(extension,'manifest.json'),'utf8'));
+  let worker;
+  for(let attempt=0;attempt<100&&!worker;attempt++){
+    for(const candidate of context.serviceWorkers()){
+      const matches=await candidate.evaluate(expected=>{const manifest=chrome.runtime.getManifest();return manifest.version===expected.version&&manifest.options_page===expected.options_page&&manifest.action?.default_popup===expected.action?.default_popup;},expected).catch(()=>false);
+      if(matches){worker=candidate;break;}
+    }
+    if(!worker)await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  if(!worker){console.error('Workers',await Promise.all(context.serviceWorkers().map(async candidate=>({url:candidate.url(),manifest:await candidate.evaluate(()=>{const value=chrome.runtime.getManifest();return {name:value.name,version:value.version,popup:value.action?.default_popup,options:value.options_page};}).catch(()=>null)}))));throw Error('Tampermonkey service worker did not start');}
   const id=worker.url().split('/')[2];
   const permission=await context.newPage();await permission.goto(`chrome://extensions/?id=${id}`);
   await permission.evaluate(async id=>chrome.developerPrivate.updateExtensionConfiguration({extensionId:id,userScriptsAccess:true}),id);
@@ -47,6 +86,7 @@ const analysis=()=>({channel:'test',updatedAt:now(),computedAt:now(),stale:false
     if(!installer.isClosed())console.error('Installer controls',await installer.locator('input,button').evaluateAll(nodes=>nodes.map(node=>({type:node.type,value:node.value,text:node.textContent,disabled:node.disabled}))));
     throw error;
   });
+  }
   const gameRequests=[];
   await context.route('https://play.multidonate.ru/**',async route=>{
     const url=new URL(route.request().url());gameRequests.push({path:url.pathname,method:route.request().method()});
@@ -59,7 +99,7 @@ const analysis=()=>({channel:'test',updatedAt:now(),computedAt:now(),stale:false
   game.on('console',message=>{if(message.type()==='error'&&message.text().includes('Zakviel'))errors.push(message.text());});
   await game.goto('https://play.multidonate.ru/c/test/');
   const host=game.locator('#zma-auction-host');await host.waitFor({state:'attached'});
-  console.log('Userscript started in Tampermonkey');
+  console.log(managerFixture?'Userscript started with GM fixture':'Userscript started in Tampermonkey');
   assert.equal(await host.count(),1);
   await game.getByRole('button',{name:'Открыть настройки Zakviel Market',exact:true}).click();
   const settings=game.getByRole('dialog',{name:'Настройки Zakviel Market',exact:true});
@@ -109,5 +149,5 @@ const analysis=()=>({channel:'test',updatedAt:now(),computedAt:now(),stale:false
   assert(gameRequests.filter(request=>request.path.endsWith('/api/live')).length<=1);
   assert(!gameRequests.some(request=>request.method!=='GET'));
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({realTampermonkey:true,strictCsp:true,login:true,gmTransport:true,import:true,auction:true,players:true,hud:true,priestHp:true,privateEventsExcluded:true,sandboxSecrets:true,mobile:true,disable:true,reload:true,noGameActions:true,errors},null,2));
+  console.log(JSON.stringify({browserVersion:context.browser()?.version(),realTampermonkey:!managerFixture,gmFixture:managerFixture,strictCsp:true,login:true,gmTransport:!managerFixture,import:true,auction:true,players:true,hud:true,priestHp:true,privateEventsExcluded:true,sandboxSecrets:!managerFixture,mobile:true,disable:true,reload:true,noGameActions:true,errors},null,2));
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{await context?.close();await new Promise(resolve=>server?server.close(resolve):resolve());});

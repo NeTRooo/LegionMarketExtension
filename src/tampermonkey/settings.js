@@ -1,9 +1,10 @@
-function installSettings(platform) {
+function installSettings(platform,compatibility) {
   const root=globalThis.__zmaMarketShell.getRoot();
   const dialog=document.createElement('dialog');dialog.setAttribute('aria-label','Настройки Zakviel Market');
   dialog.style.cssText='width:min(480px,94vw);height:auto;max-height:92dvh;overflow:auto;padding:20px';
   const form=document.createElement('form');form.method='dialog';
   const title=document.createElement('h2');title.textContent='Zakviel Market · Tampermonkey';
+  const environment=document.createElement('p');environment.textContent=compatibility?.supported?'Браузер: необходимые функции доступны.':'';
   const status=document.createElement('p');status.setAttribute('role','status');
   const account=document.createElement('p');
   const identity=document.createElement('input');identity.autocomplete='username';identity.placeholder='Логин или почта';identity.setAttribute('aria-label','Логин или почта');
@@ -28,7 +29,7 @@ function installSettings(platform) {
     toggle.textContent=enabled?'Выключить сбор':'Включить сбор';sync.value=settings.mode;queue.textContent=`В очереди этой вкладки: ${journal.count}`;
   }
   const hint=document.createElement('p');hint.textContent='Сервер: http://127.0.0.1:4173. Отправка работает, пока открыта страница игры. Сбор выключен при каждой загрузке страницы.';
-  form.append(title,account,identity,password,login,logout,toggle,label,sync,queue,button('Очистить очередь этой вкладки',()=>send({type:'clear-journal'})),hint,status,button('Закрыть',()=>{password.value='';dialog.close();}));
+  form.append(title,environment,account,identity,password,login,logout,toggle,label,sync,queue,button('Очистить очередь этой вкладки',()=>send({type:'clear-journal'})),hint,status,button('Закрыть',()=>{password.value='';dialog.close();}));
   form.addEventListener('submit',event=>{event.preventDefault();if(!login.hidden)login.click();});
   form.addEventListener('keydown',event=>event.stopPropagation());form.addEventListener('keyup',event=>event.stopPropagation());
   dialog.addEventListener('close',()=>{password.value='';});

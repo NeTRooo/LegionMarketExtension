@@ -1,6 +1,6 @@
 {
   "name": "legion-market-extension",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc --noEmit && node scripts/build.mjs",
     "test": "node --test tests/*.test.cjs tests/*.test.mjs",
+    "test:firefox": "node tests/firefox-compartment.cjs",
     "check:distribution": "node scripts/check-distribution.mjs"
   },
   "dependencies": {
