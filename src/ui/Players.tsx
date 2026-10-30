@@ -1,0 +1,53 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api, Settings, useFoundation } from './foundation';
+
+export type PlayersRequest=<T>(path:string,init?:RequestInit)=>Promise<T>;
+type Person={id:string;channel:string;login:string;name:string;lastSeen:string|null;source:string|null;location:string|null;locationAt:string|null;onlineUntil:string|null;online:boolean;friend:boolean;favorite:boolean};
+type Observations={enabled:boolean;retentionHours:number;serverTime:string;onlineSeconds:number;people:Person[];channels:string[];sources:Record<string,string>};
+const date=(value:string|null)=>value?new Date(value).toLocaleString('ru-RU'):'Нет наблюдений';
+
+export default function Players({token='',request:customRequest,onSeller}:{token?:string;request?:PlayersRequest;onSeller:(channel:string,seller:string)=>void}){
+  const {notify,refreshSettings}=useFoundation();
+  const request=useMemo<PlayersRequest>(()=>customRequest||((path,init)=>api(path,token,init)),[customRequest,token]);
+  const [data,setData]=useState<Observations|null>(null),[settings,setSettings]=useState<Settings|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[reload,setReload]=useState(0);
+  const [query,setQuery]=useState(''),[channel,setChannel]=useState(''),[onlineOnly,setOnlineOnly]=useState(false),[contactsOnly,setContactsOnly]=useState(false),[monitor,setMonitor]=useState(false),[page,setPage]=useState(0);
+  const [login,setLogin]=useState(''),[contactChannel,setContactChannel]=useState(''),[favorite,setFavorite]=useState(true),[ttl,setTtl]=useState('24');
+  const baseline=useRef(false),previous=useRef<Set<string>>(new Set()),generation=useRef(0),loadedTtl=useRef<number|null>(null);
+  const [clock,setClock]=useState(Date.now());
+  useEffect(()=>{baseline.current=false;previous.current.clear();setMonitor(false)},[request]);
+  useEffect(()=>{
+    if(!customRequest&&!token)return;
+    const abort=new AbortController();let inFlight=false;
+    const load=async()=>{if(inFlight||document.hidden)return;inFlight=true;try{
+      const [result,current]=await Promise.all([request<Observations>('/api/players',{signal:abort.signal}),request<Settings>('/api/settings',{signal:abort.signal})]);
+      if(abort.signal.aborted)return;setData(result);setSettings(current);if(loadedTtl.current!==current.privacy.presenceRetentionHours){loadedTtl.current=current.privacy.presenceRetentionHours;setTtl(String(current.privacy.presenceRetentionHours))}setError('');
+    }catch(e){if(!abort.signal.aborted)setError((e as Error).message)}finally{inFlight=false;if(!abort.signal.aborted)setClock(Date.now())}};
+    void load();const timer=setInterval(()=>void load(),30000),visible=()=>{if(!document.hidden)void load()};document.addEventListener('visibilitychange',visible);
+    return()=>{abort.abort();clearInterval(timer);document.removeEventListener('visibilitychange',visible)};
+  },[request,reload]);
+  useEffect(()=>{
+    if(!data)return;
+    const online=new Set(data.people.filter(p=>p.onlineUntil&&Date.parse(p.onlineUntil)>Date.now()).map(p=>p.id));
+    if(baseline.current&&monitor&&data.enabled){const arrived=data.people.filter(p=>p.favorite&&online.has(p.id)&&!previous.current.has(p.id));if(arrived.length)notify(`Избранные игроки появились в наблюдениях: ${arrived.slice(0,5).map(p=>p.name).join(', ')}`)}
+    baseline.current=true;previous.current=online;
+  },[data]);
+  useEffect(()=>setPage(0),[query,channel,onlineOnly,contactsOnly]);
+  const isOnline=(p:Person)=>!error&&!!p.onlineUntil&&Date.parse(p.onlineUntil)>clock;
+  const people=(data?.people||[]).filter(p=>(!channel||p.channel===channel)&&(!query||`${p.name} ${p.login}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))&&(!onlineOnly||isOnline(p))&&(!contactsOnly||p.friend||p.favorite));
+  const pages=Math.max(1,Math.ceil(people.length/50));
+  useEffect(()=>{if(page>=pages)setPage(pages-1)},[page,pages]);
+  async function mutate(path:string,method:string,body?:unknown){
+    if(busy)return;setBusy(true);setError('');const current=++generation.current;
+    try{await request(path,{method,...(body===undefined?{}:{body:JSON.stringify(body)})});if(current===generation.current)setReload(x=>x+1);return true}catch(e){setError((e as Error).message);return false}finally{if(current===generation.current)setBusy(false)}
+  }
+  async function configure(next:Settings){if(await mutate('/api/settings','PUT',next)){setSettings(next);baseline.current=false;void refreshSettings()}}
+  async function contact(person:Person,changes:Partial<Person>){await mutate('/api/players/contacts','PUT',{channel:person.channel,login:person.login,name:person.name,friend:person.friend,favorite:person.favorite,...changes})}
+  if(!customRequest&&!token)return <section className="panel"><h1>Игроки и друзья</h1><p>Войдите в аккаунт сайта. Контакты и наблюдения приватны.</p></section>;
+  return <div className="players-dashboard"><div className="page-title"><span>Личные наблюдения</span><h1>Игроки и друзья</h1><p className="muted">Здесь только игроки, которых видели ваши сборщики. Это не общий список онлайна канала.</p></div>
+    {error&&<p role="alert" className="form-error">{error}</p>}
+    <section className="panel"><h2>Сбор и срок хранения</h2>{settings?<><label className="auction-check"><input aria-label="Собирать наблюдения игроков" type="checkbox" checked={settings.modules.players} disabled={busy} onChange={e=>void configure({...settings,modules:{...settings.modules,players:e.target.checked}})}/> Сохранять последние публичные наблюдения игроков</label><p className="muted">По умолчанию выключено. Сборщик расширения также должен быть включён. При выключении наблюдения удаляются, друзья остаются.</p><div className="players-actions"><label>Хранить часов<input aria-label="Срок хранения наблюдений" type="number" min={1} max={168} value={ttl} onChange={e=>setTtl(e.target.value)}/></label><button disabled={busy||!Number.isInteger(Number(ttl))||Number(ttl)<1||Number(ttl)>168} onClick={()=>void configure({...settings,privacy:{...settings.privacy,presenceRetentionHours:Number(ttl)}})}>Сохранить срок</button><button disabled={busy} onClick={()=>{baseline.current=false;void mutate('/api/players/observations','DELETE')}}>Удалить все наблюдения</button><button disabled={busy} onClick={()=>setReload(x=>x+1)}>Обновить список</button></div></>:<p>Загрузка настроек…</p>}<p className="muted">Сохраняется только последнее состояние, максимум 2000 игроков на аккаунт. История перемещений, координаты, текст сообщений и ЛС в модуль не входят. Истёкшие статусы скрываются сразу и удаляются сервером в течение минуты.</p></section>
+    <section className="panel"><h2>Добавить контакт</h2><form className="players-actions" onSubmit={e=>{e.preventDefault();void mutate('/api/players/contacts','PUT',{channel:contactChannel,login,name:login,friend:true,favorite}).then(ok=>{if(ok)setLogin('')})}}><label>Канал<input aria-label="Канал контакта" required maxLength={80} pattern="[A-Za-z0-9_-]+" value={contactChannel} onChange={e=>setContactChannel(e.target.value)} placeholder={data?.channels[0]||'zakvielchannel'}/></label><label>Игровой логин<input aria-label="Логин контакта" required maxLength={100} pattern="[A-Za-z0-9_][A-Za-z0-9_.-]*" value={login} onChange={e=>setLogin(e.target.value)}/></label><label className="auction-check"><input type="checkbox" checked={favorite} onChange={e=>setFavorite(e.target.checked)}/> Избранный</label><button disabled={busy} type="submit">Добавить друга</button></form><p className="muted">До 200 контактов. Список приватен и синхронизируется между сайтом и расширением через ваш аккаунт.</p></section>
+    <section className="panel"><div className="auction-filters"><label>Игрок<input aria-label="Поиск игрока" value={query} onChange={e=>setQuery(e.target.value)}/></label><label>Канал<select aria-label="Канал игроков" value={channel} onChange={e=>setChannel(e.target.value)}><option value="">Все мои каналы</option>{data?.channels.map(c=><option key={c} value={c}>{c}</option>)}</select></label></div><label className="auction-check"><input type="checkbox" checked={onlineOnly} onChange={e=>setOnlineOnly(e.target.checked)}/> Виден сейчас · наблюдение в городе/шахте младше {data?.onlineSeconds||120} секунд</label><label className="auction-check"><input type="checkbox" checked={contactsOnly} onChange={e=>setContactsOnly(e.target.checked)}/> Только друзья и избранные</label><label className="auction-check"><input type="checkbox" checked={monitor} onChange={e=>setMonitor(e.target.checked)}/> Уведомлять о появлении избранных, пока открыто это окно</label><p className="muted">Первое обновление без уведомлений. Чат и наличие лота не доказывают онлайн. Уход из видимой локации снимает отметку; отсутствие свежих данных не доказывает выход из игры.</p></section>
+    <section className="panel"><h2>Игроки · {people.length}</h2><div className="table"><table><thead><tr><th>Игрок / канал</th><th>Наблюдение</th><th>Последнее место</th><th>Контакты и действия</th></tr></thead><tbody>{people.slice(page*50,(page+1)*50).map(p=><tr key={p.id}><td><b>{p.name}</b><small>{p.login} · {p.channel}</small></td><td>{isOnline(p)?<span className="confidence high">Виден сейчас</span>:<span className="muted">Сейчас не подтверждён</span>}<small>{p.source?data?.sources[p.source]||p.source:'Источник неизвестен'}</small><small>{date(p.lastSeen)}</small></td><td>{p.location||'Не определено'}<small>{date(p.locationAt)}</small></td><td><div className="players-actions"><button disabled={busy} aria-pressed={p.friend} onClick={()=>void contact(p,{friend:!p.friend})}>{p.friend?'Убрать из друзей':'В друзья'}</button><button disabled={busy} aria-pressed={p.favorite} onClick={()=>void contact(p,{favorite:!p.favorite})}>{p.favorite?'★ Избранный':'☆ В избранное'}</button><button onClick={()=>onSeller(p.channel,p.login)}>Досье продавца</button>{(p.friend||p.favorite)&&<button disabled={busy} onClick={()=>void mutate('/api/players/contacts?'+new URLSearchParams({channel:p.channel,login:p.login}),'DELETE')}>Удалить контакт</button>}{p.lastSeen&&<button disabled={busy} onClick={()=>void mutate('/api/players/observations?'+new URLSearchParams({channel:p.channel,login:p.login}),'DELETE')}>Забыть наблюдение</button>}</div></td></tr>)}</tbody></table></div>{!people.length&&<p className="muted">Наблюдений по фильтру нет. Включите модуль и сбор, затем посетите город или шахту обычным способом.</p>}<div className="players-actions"><button disabled={page===0} onClick={()=>setPage(p=>p-1)}>Назад</button><span>{page+1} / {pages}</span><button disabled={page+1>=pages} onClick={()=>setPage(p=>p+1)}>Далее</button></div></section>
+  </div>;
+}
